@@ -1,29 +1,16 @@
-CREATE TABLE IF NOT EXISTS users (
-  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  telegram_id BIGINT UNIQUE NOT NULL,
-  username TEXT,
-  created_at TIMESTAMP NOT NULL DEFAULT now()
-);
+-- schema.sql
 
-CREATE TABLE IF NOT EXISTS eggs (
-  id UUID PRIMARY KEY,
-  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  species TEXT NOT NULL,
-  created_at TIMESTAMP NOT NULL DEFAULT now(),
-  hatch_at TIMESTAMP NOT NULL,
-  status TEXT NOT NULL DEFAULT 'PENDING',
-  rarity_table JSONB,
-  seed TEXT
-);
-
-CREATE INDEX IF NOT EXISTS eggs_ready_idx ON eggs (status, hatch_at);
-
+-- Table for storing pets
 CREATE TABLE IF NOT EXISTS pets (
-  id UUID PRIMARY KEY,
-  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  species TEXT NOT NULL,
-  stage INT NOT NULL DEFAULT 1,
-  is_shiny BOOLEAN NOT NULL DEFAULT FALSE,
-  traits JSONB,
-  created_at TIMESTAMP NOT NULL DEFAULT now()
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL,        -- Telegram user ID
+    is_shiny BOOLEAN DEFAULT false,
+    color TEXT NOT NULL,
+    aura TEXT NOT NULL,
+    eyes TEXT NOT NULL,
+    pattern TEXT NOT NULL,
+    hatched_at TIMESTAMP DEFAULT NOW()
 );
+
+-- Optional: index for faster lookups by user
+CREATE INDEX IF NOT EXISTS idx_pets_user_id ON pets(user_id);
