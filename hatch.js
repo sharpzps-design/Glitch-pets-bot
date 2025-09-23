@@ -1,18 +1,35 @@
 // hatch.js
-import seedrandom from 'seedrandom';
 
-export function rollPetFromEgg(egg) {
-  const seed = egg.seed || `${egg.id}-${egg.user_id}-${egg.hatch_at}`;
-  const rng = seedrandom(seed);
+// Simple random helpers
+const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
-  const shiny = rng() < 0.05; // 5% shiny chance
-  const pick = (arr) => arr[Math.floor(rng() * arr.length)];
+const COLORS = ['Neon Blue', 'Crimson Red', 'Aurora Purple', 'Cyber Yellow'];
+const AURAS  = ['Smoke', 'Sparks', 'Halo', 'Glitch'];
+const EYES   = ['Glitch Green', 'Laser Pink', 'Chrome', 'Void'];
+const PATTERNS = ['None', 'Stripes', 'Spots', 'Circuit'];
 
-  const color   = shiny ? pick(["Prismatic","Neon Blue","Acid Green","Hot Pink"])
-                        : pick(["Crimson","Neon Blue","Hot Pink","Deep Red"]);
-  const aura    = shiny ? "Holo-glitch" : pick(["Smoke","Sparks","Static"]);
-  const eyes    = shiny ? "Dual-glitch" : pick(["Glitch Yellow","Glitch Green"]);
-  const pattern = shiny ? "Prismatic" : pick(["None","Stripes","Fractal"]);
+export async function handleHatch({ bot, msg, query }) {
+  const userId = msg.from.id;
 
-  return { is_shiny: shiny, traits: { color, aura, eyes, pattern } };
+  // create a pet row (adapt table/columns to your schema)
+  const traits = {
+    color: pick(COLORS),
+    aura: pick(AURAS),
+    eyes: pick(EYES),
+    pattern: pick(PATTERNS),
+  };
+
+  // Example insert (adjust to your tables!)
+  // Suppose you have a `pets` table: id SERIAL, user_id BIGINT, color TEXT, aura TEXT, eyes TEXT, pattern TEXT, created_at TIMESTAMP DEFAULT now()
+  await query(
+    `INSERT INTO pets (user_id, color, aura, eyes, pattern)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [userId, traits.color, traits.aura, traits.eyes, traits.pattern]
+  );
+
+  await bot.sendMessage(
+    msg.chat.id,
+    `🥚 Your egg wiggles… crack! A glitch pet pops out!\n\n` +
+      `Traits → color: ${traits.color}; aura: ${traits.aura}; eyes: ${traits.eyes}; pattern: ${traits.pattern}`
+  );
 }
