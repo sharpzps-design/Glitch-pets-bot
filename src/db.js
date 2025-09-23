@@ -1,14 +1,16 @@
 // src/db.js
-import pkg from 'pg';
-const { Pool } = pkg;
+import pg from "pg";
+import dotenv from "dotenv";
 
-// Create a new connection pool
+dotenv.config();
+
+const { Pool } = pg;
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,  // ✅ Render/Heroku style env var
-  ssl: { rejectUnauthorized: false }           // ✅ required for cloud Postgres
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false, // needed for Supabase/Render
+  },
 });
 
-// Export a simple query function
-export default {
-  query: (text, params) => pool.query(text, params),
-};
+export default pool;
