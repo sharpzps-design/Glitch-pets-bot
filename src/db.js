@@ -1,21 +1,14 @@
 // src/db.js
-import pkg from "pg";
+import pkg from 'pg';
 const { Pool } = pkg;
 
-const connectionString = process.env.DATABASE_URL;
-if (!connectionString) {
-  throw new Error("DATABASE_URL is not set");
-}
-
+// Create a new connection pool
 const pool = new Pool({
-  connectionString,
-  ssl: {
-    require: true,            // ✅ force SSL
-    rejectUnauthorized: false // ✅ accept Supabase's cert
-  },
+  connectionString: process.env.DATABASE_URL,  // ✅ Render/Heroku style env var
+  ssl: { rejectUnauthorized: false }           // ✅ required for cloud Postgres
 });
 
+// Export a simple query function
 export default {
   query: (text, params) => pool.query(text, params),
-  pool,
 };
