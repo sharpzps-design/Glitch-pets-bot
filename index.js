@@ -1,74 +1,55 @@
-import TelegramBot from "node-telegram-bot-api";
-import express from "express";
-import db from "./db.js";
-import { rollPetFromEgg } from "./hatch.js";
+import TelegramBot from 'node-telegram-bot-api';
+import express from 'express';
+import db from './src/db.js';   // ✅ points to src/db.js
+import { rollPetFromEgg } from './src/hatch.js'; // ✅ also in src
 
-const token = process.env.BOT_TOKEN;
-const bot = new TelegramBot(token, { polling: true });
+// Load environment variables
+const TOKEN = process.env.BOT_TOKEN;
+const PORT = process.env.PORT || 10000;
 
-// simple express server to keep Render alive
+const bot = new TelegramBot(TOKEN, { polling: true });
+
+// Simple express web server (Render health check)
 const app = express();
-app.get("/", (req, res) => res.send("Bot is running"));
-app.listen(process.env.PORT || 10000, () => {
-  console.log("Web server running");
-});
+app.get('/', (req, res) => res.send('Bot is running!'));
+app.listen(PORT, () => console.log(`Web server running on port ${PORT}`));
 
-// start command
-bot.onText(/\/start/, async (msg) => {
-  const chatId = msg.chat.id;
-
-  await bot.sendMessage(
-    chatId,
-    "Welcome to Glitch Pets! 🐣\nUse /ping to test me or /hatch to hatch an egg!"
-  );
-
-  // give user an egg if they don’t have one
-  await db.query(
-    `INSERT INTO eggs (user_id, hatch_at, seed)
-     VALUES ($1, NOW() + interval '10 minutes', floor(random()*1000000)::text)
-     ON CONFLICT (user_id) DO NOTHING`,
-    [msg.from.id]
-  );
-});
-
-// ping command
+// /ping command
 bot.onText(/\/ping/, (msg) => {
-  bot.sendMessage(msg.chat.id, "pong 🏓");
+  bot.sendMessage(msg.chat.id, 'pong 🏓');
 });
 
-// hatch command
+// /hatch command
 bot.onText(/\/hatch/, async (msg) => {
-  const chatId = msg.chat.id;
-
   try {
+    const userId = msg.from.id;
+
+    // Insert a new egg in the DB
     const result = await db.query(
-      `SELECT * FROM eggs WHERE user_id = $1 LIMIT 1`,
-      [msg.from.id]
+      `INSERT INTO eggs (user_id, species, status) 
+       VALUES ($1, $2, $3) 
+       RETURNING *`,
+      [userId, 'mystery', 'HATCHED']
     );
+
     const egg = result.rows[0];
-
-    if (!egg) {
-      return bot.sendMessage(chatId, "❌ You don’t have any eggs to hatch!");
-    }
-
-    // roll a pet
     const pet = rollPetFromEgg(egg);
 
-    // save pet + delete egg
-    await db.query(
-      `INSERT INTO pets (user_id, traits, is_shiny, created_at)
-       VALUES ($1, $2, $3, NOW())`,
-      [msg.from.id, pet.traits, pet.is_shiny]
-    );
-
-    await db.query(`DELETE FROM eggs WHERE id = $1`, [egg.id]);
-
     await bot.sendMessage(
-      chatId,
-      `🥚 Your egg wiggles… crack! A glitch pet pops out! ✨\n\nTraits → color: ${pet.traits.color}; aura: ${pet.traits.aura}; eyes: ${pet.traits.eyes}; pattern: ${pet.traits.pattern}`
+      msg.chat.id,
+      `🥚 Your egg wiggles... crack! A glitch pet pops out!\n\n` +
+      `Traits → color: ${pet.traits.color}; aura: ${pet.traits.aura}; ` +
+      `eyes: ${pet.traits.eyes}; pattern: ${pet.traits.pattern}`
     );
   } catch (err) {
-    console.error("Hatch error", err);
-    bot.sendMessage(chatId, "⚠️ Something went wrong hatching your pet.");
+    console.error('Hatch error', err);
+    await bot.sendMessage(msg.chat.id, '⚠️ Something went wrong hatching your pet.');
+  }
+});
+
+// Default message
+bot.on('message', (msg) => {
+  if (!msg.text.startsWith('/')) {
+    bot.sendMessage(msg.chat.id, 'I know /ping and /hatch for now. More commands coming!');
   }
 });
