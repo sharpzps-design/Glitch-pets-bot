@@ -1,13 +1,18 @@
 // src/db.js
-import pkg from 'pg';
+import pkg from "pg";
 const { Pool } = pkg;
 
+const connectionString = process.env.DATABASE_URL;
+if (!connectionString) {
+  throw new Error("DATABASE_URL is missing");
+}
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  // Accept Supabase's SSL cert in hosted environments (Render)
-  ssl: { rejectUnauthorized: false }
+  connectionString,
+  ssl: { rejectUnauthorized: false } // <- accept Supabase's cert
 });
 
 export default {
-  query: (text, params) => pool.query(text, params)
+  query: (text, params) => pool.query(text, params),
+  pool,
 };
