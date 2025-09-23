@@ -1,27 +1,54 @@
-// index.js  — Long-polling Telegraf on Render
+// index.js  — Telegraf (long-polling) + pg (Postgres) on Render
 import express from "express";
 import { Telegraf } from "telegraf";
-import sql from "./db.js"; // your Supabase Postgres client
+import pkg from "pg";
 
 const app = express();
-const { BOT_TOKEN, PORT = 10000 } = process.env;
+const { BOT_TOKEN, DATABASE_URL, PORT = 10000 } = process.env;
 
 if (!BOT_TOKEN) throw new Error("BOT_TOKEN missing");
+if (!DATABASE_URL) throw new Error("DATABASE_URL missing");
 
-// ---- Bot setup
+// ----- Postgres (pg) -----
+const { Pool } = pkg;
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: { rejectUnauthorized: false }, // Supabase requires SSL
+});
+
+// quick connectivity check on boot (prints to logs)
+(async () => {
+  try {
+    const r = await pool.query("select now()");
+    console.log("DB connected at:", r.rows[0].now);
+  } catch (e) {
+    console.error("DB connection error:", e.message);
+  }
+})();
+
+// ----- Bot -----
 const bot = new Telegraf(BOT_TOKEN);
 
-// Basic command(s)
+// basic commands
 bot.start(async (ctx) => {
   await ctx.reply("Welcome to Glitch Pets! 🥚 You received a starter Firebyte Egg.");
 });
 
-// Health check for Render
+bot.command("egg", async (ctx) => {
+  await ctx.reply("🥚 Your egg is warming… keep chatting to hatch it!");
+});
+
+bot.command("help", async (ctx) => {
+  await ctx.reply("Commands:\n/start – get your starter egg\n/egg – check on your egg\n/help – this menu");
+});
+
+// ----- Health route for Render -----
 app.get("/", (_req, res) => res.send("OK"));
 
-// IMPORTANT: ensure no webhook is set, then start polling
+// ----- Start long-polling -----
 (async () => {
   try {
+    // ensure no old webhook is set, then start polling
     await bot.telegram.deleteWebhook({ drop_pending_updates: true });
     await bot.launch({ dropPendingUpdates: true });
     console.log("✅ Bot polling started");
@@ -30,9 +57,9 @@ app.get("/", (_req, res) => res.send("OK"));
   }
 })();
 
-// Keep a tiny web server alive for Render health checks
+// ----- Start tiny web server (for Render health checks) -----
 app.listen(PORT, () => console.log("Web server on :" + PORT));
 
-// Graceful shutdown (Render restarts)
+// graceful shutdown
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
