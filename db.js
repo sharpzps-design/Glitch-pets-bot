@@ -1,11 +1,10 @@
-import pg from 'pg';
-const { Pool } = pg;
+// db.js - using pg
+import pkg from 'pg';
+const { Pool } = pkg;
 
-export const pool = new Pool({
-  connectionString: process.env.DATABASE_URL
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
 });
 
-export async function query(q, params) {
-  const res = await pool.query(q, params);
-  return res;
-}
+export default pool;
