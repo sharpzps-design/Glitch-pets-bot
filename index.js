@@ -1,90 +1,69 @@
-// index.js
+import TelegramBot from "node-telegram-bot-api";
 import express from "express";
-import { Telegraf } from "telegraf";
-import db from "./src/db.js";
-import { rollPetFromEgg } from "./src/hatch.js";
+import db from "./src/db.js";         // keep db import from /src/db.js
+import { rollPetFromEgg } from "./hatch.js";  // FIXED hatch.js path
 
-const BOT_TOKEN = process.env.BOT_TOKEN;
-if (!BOT_TOKEN) {
-  console.error("Missing BOT_TOKEN env var");
-  process.exit(1);
-}
+const { BOT_TOKEN } = process.env;
+if (!BOT_TOKEN) throw new Error("BOT_TOKEN missing");
 
-const bot = new Telegraf(BOT_TOKEN);
-
-// --- simple keep-alive webserver for Render/Glitch ---
+const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 const app = express();
 const PORT = process.env.PORT || 10000;
-app.get("/", (_, res) => res.send("Glitch Pets bot is alive"));
+
+app.get("/", (req, res) => res.send("Glitch Pets Bot is running!"));
 app.listen(PORT, () => console.log(`Web server running on port ${PORT}`));
 
-// --- helpers ---
-function formatTraits(traits) {
-  const { color, aura, eyes, pattern } = traits;
-  return `Traits → color: ${color}; aura: ${aura}; eyes: ${eyes}; pattern: ${pattern}`;
-}
-
-// --- commands ---
-bot.start((ctx) => {
-  ctx.reply("🐾 Welcome to Glitch Pets!\n\nI know /ping and /hatch for now. More commands coming!");
+// /start command
+bot.onText(/\/start/, (msg) => {
+  bot.sendMessage(msg.chat.id, "🐾 Welcome to Glitch Pets! Type /hatch to hatch your first pet.");
 });
 
-bot.command("ping", (ctx) => ctx.reply("pong 🏓"));
+// /ping command
+bot.onText(/\/ping/, (msg) => {
+  bot.sendMessage(msg.chat.id, "pong 🏓");
+});
 
-// /hatch: generate traits, save a pet row, reply with summary
-bot.command("hatch", async (ctx) => {
+// /hatch command
+bot.onText(/\/hatch/, async (msg) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+
   try {
-    const userId = ctx.from.id;
-
-    // You already have an "egg" shape from earlier examples; here we just seed from user/time
+    // 1. create a fake egg record
     const egg = {
-      id: `egg-${Date.now()}`,
+      id: Date.now(),
       user_id: userId,
       hatch_at: new Date().toISOString(),
-      seed: undefined, // let hatch.js derive a seed from fields above
     };
 
-    // roll traits
-    const rolled = rollPetFromEgg(egg); // { is_shiny, traits: {color,aura,eyes,pattern} }
+    // 2. roll traits from hatch.js
+    const pet = rollPetFromEgg(egg);
 
-    // save pet into DB
-    const insert = `
-      INSERT INTO pets (user_id, is_shiny, color, aura, eyes, pattern)
-      VALUES ($1, $2, $3, $4, $5, $6)
-      RETURNING id, hatched_at
+    // 3. save to DB
+    await db`
+      insert into pets (user_id, traits, is_shiny)
+      values (${userId}, ${pet.traits}, ${pet.is_shiny})
     `;
-    const params = [
-      userId,
-      rolled.is_shiny,
-      rolled.traits.color,
-      rolled.traits.aura,
-      rolled.traits.eyes,
-      rolled.traits.pattern,
-    ];
 
-    const result = await db.query(insert, params);
-    const petId = result.rows[0]?.id;
+    // 4. reply to user
+    const traits = Object.entries(pet.traits)
+      .map(([k, v]) => `${k}: ${v}`)
+      .join("; ");
+    const shinyMark = pet.is_shiny ? " ✨SHINY✨ " : "";
 
-    const shinyTxt = rolled.is_shiny ? "✨(SHINY!)✨ " : "";
-    await ctx.reply(
-      `🥚 Your egg wiggles… crack! ${shinyTxt}A glitch pet pops out!\n\n${formatTraits(
-        rolled.traits
-      )}\n\n#${petId ? `Pet ID: ${petId}` : ""}`
+    bot.sendMessage(
+      chatId,
+      `🥚 Your egg wiggles... crack! A glitch pet pops out!\n\n${shinyMark}Traits → ${traits}`
     );
   } catch (err) {
-    console.error("HATCH error:", err);
-    await ctx.reply("Uh-oh, I glitched while hatching that egg. Try again in a moment!");
+    console.error("Hatch error", err);
+    bot.sendMessage(chatId, "⚠️ Something went wrong hatching your pet.");
   }
 });
 
-// --- generic text handler so bot “knows” supported commands ---
-bot.on("text", (ctx) => {
-  ctx.reply("I know /ping and /hatch for now. More commands coming!");
+// fallback for unknown messages
+bot.on("message", (msg) => {
+  if (!msg.text.startsWith("/")) {
+    bot.sendMessage(msg.chat.id, "I know /ping and /hatch for now. More commands coming!");
+  }
 });
-
-// start polling
-bot.launch().then(() => console.log("Bot launched ✅"));
-
-// graceful stop for Render
-process.once("SIGINT", () => bot.stop("SIGINT"));
-process.once("SIGTERM", () => bot.stop("SIGTERM"));
