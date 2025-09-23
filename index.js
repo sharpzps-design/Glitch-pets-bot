@@ -1,84 +1,66 @@
-// index.js
+// index.js  (root folder)
+// Simpler: POLLING-ONLY + explicitly remove any existing webhook on startup.
+
+import 'dotenv/config';
 import TelegramBot from 'node-telegram-bot-api';
 import express from 'express';
 import { rollPetFromEgg } from './hatch.js';
-// If/when we start writing to the database, uncomment the next line:
-// import db from './src/db.js';
+
+// If you need DB later you can import it like this:
+// import { pool } from './src/db.js';
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 if (!BOT_TOKEN) {
-  console.error('Missing BOT_TOKEN environment variable');
+  console.error('BOT_TOKEN is missing in environment');
   process.exit(1);
 }
 
-// 1) Start Telegram bot with long polling
+// Start bot in POLLING mode
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
-// 2) Tiny web server for Render health checks
-const app = express();
-app.get('/', (_req, res) => res.send('Glitch Pets bot is running.'));
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`Web server running on port ${PORT}`));
+// IMPORTANT: make sure no webhook is registered (prevents 409 conflicts)
+(async () => {
+  try {
+    await bot.deleteWebHook({ drop_pending_updates: true });
+    console.log('Webhook cleared; polling is active.');
+  } catch (err) {
+    console.warn('Could not delete webhook (continuing):', err?.message || err);
+  }
+})();
 
-// 3) Help text
-bot.setMyCommands([
-  { command: 'start', description: 'Start' },
-  { command: 'ping',  description: 'Ping the bot' },
-  { command: 'hatch', description: 'Hatch your egg' },
-]);
-
-// 4) Handlers
-bot.onText(/^\/start|^hi$|^hello$/i, (msg) => {
-  bot.sendMessage(
-    msg.chat.id,
-    'I know /ping and /hatch for now. More commands coming!'
-  );
-});
-
+// Basic commands
 bot.onText(/^\/ping$/, (msg) => {
   bot.sendMessage(msg.chat.id, 'pong 🏓');
 });
 
 bot.onText(/^\/hatch$/, async (msg) => {
   try {
-    // Build a stable “egg” seed from user + time for trait RNG
+    // Build a simple "egg" object for trait RNG. No DB needed for now.
     const egg = {
-      id: `${msg.chat.id}-${Date.now()}`,
-      user_id: msg.from?.id ?? msg.chat.id,
+      id: `${msg.from.id}-${Date.now()}`,
+      user_id: msg.from.id,
       hatch_at: new Date().toISOString(),
     };
 
-    const pet = rollPetFromEgg(egg);
+    const result = rollPetFromEgg(egg);
+    const { color, aura, eyes, pattern } = result.traits;
 
-    // (DB write will come later — keeping things simple & stable for now)
-    // Example when we enable DB:
-    // await db.query('INSERT INTO pets(user_id, traits, is_shiny) VALUES ($1,$2,$3)', [
-    //   egg.user_id,
-    //   pet.traits,
-    //   pet.is_shiny,
-    // ]);
-
-    const t = pet.traits;
     const lines = [
       '🥚 Your egg wiggles… crack! A glitch pet pops out! ✨',
       '',
-      `Traits → color: ${t.color}; aura: ${t.aura}; eyes: ${t.eyes}; pattern: ${t.pattern}`,
-      pet.is_shiny ? '⭐️ SHINY!' : '',
-    ].filter(Boolean);
+      `Traits → color: ${color}; aura: ${aura}; eyes: ${eyes}; pattern: ${pattern}`,
+      result.is_shiny ? '\n🌟 It’s **SHINY**! 🌟' : '',
+    ];
 
     await bot.sendMessage(msg.chat.id, lines.join('\n'));
-  } catch (err) {
-    console.error('Hatch error', err);
-    bot.sendMessage(msg.chat.id, '⚠️ Something went wrong hatching your pet.');
+  } catch (e) {
+    console.error('Hatch error:', e);
+    await bot.sendMessage(msg.chat.id, '⚠️ Something went wrong hatching your pet.');
   }
 });
 
-// 5) Fallback for other messages
-bot.on('message', (msg) => {
-  if (typeof msg.text === 'string' && !msg.text.startsWith('/')) {
-    bot.sendMessage(
-      msg.chat.id,
-      'I know /ping and /hatch for now. More commands coming!'
-    );
-  }
-});
+// Tiny web server just so Render has a port to ping
+const app = express();
+const PORT = process.env.PORT || 10000;
+app.get('/', (_req, res) => res.send('Glitch Pets Bot is running (polling)'));
+app.listen(PORT, () => console.log(`Web server running on port ${PORT}`));
