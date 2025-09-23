@@ -1,16 +1,9 @@
--- schema.sql
-
--- Table for storing pets
-CREATE TABLE IF NOT EXISTS pets (
-    id SERIAL PRIMARY KEY,
-    user_id BIGINT NOT NULL,        -- Telegram user ID
-    is_shiny BOOLEAN DEFAULT false,
-    color TEXT NOT NULL,
-    aura TEXT NOT NULL,
-    eyes TEXT NOT NULL,
-    pattern TEXT NOT NULL,
-    hatched_at TIMESTAMP DEFAULT NOW()
+CREATE TABLE IF NOT EXISTS eggs (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL,
+  species TEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  hatch_at TIMESTAMP NOT NULL,
+  status TEXT NOT NULL DEFAULT 'PENDING'
 );
-
--- Optional: index for faster lookups by user
-CREATE INDEX IF NOT EXISTS idx_pets_user_id ON pets(user_id);
+CREATE INDEX IF NOT EXISTS idx_eggs_due ON eggs (status, hatch_at);
