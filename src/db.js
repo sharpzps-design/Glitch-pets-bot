@@ -1,14 +1,19 @@
 // src/db.js
 import pg from 'pg';
-
 const { Pool } = pg;
 
-// Render automatically provides DATABASE_URL in environment variables
+// Render sets DATABASE_URL automatically
+const connectionString = process.env.DATABASE_URL;
+if (!connectionString) {
+  console.error('Missing DATABASE_URL environment variable.');
+  process.exit(1);
+}
+
+// Render Postgres requires SSL
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false, // needed for Render PostgreSQL
-  },
+  connectionString,
+  ssl: { rejectUnauthorized: false },
 });
 
-export default pool;
+// Tiny helper to run queries
+export const query = (text, params) => pool.query(text, params);
