@@ -1,100 +1,84 @@
-// index.js (root) — works with: index.js + hatch.js at root, db.js in ./src
-
-import http from 'http';
+// index.js
 import TelegramBot from 'node-telegram-bot-api';
+import express from 'express';
 import { rollPetFromEgg } from './hatch.js';
-import db from './src/db.js'; // db.js lives in ./src
+// If/when we start writing to the database, uncomment the next line:
+// import db from './src/db.js';
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 if (!BOT_TOKEN) {
-  console.error('Missing BOT_TOKEN env var.');
+  console.error('Missing BOT_TOKEN environment variable');
   process.exit(1);
 }
 
-// keep-alive web server for Render
-const PORT = process.env.PORT || 10000;
-http
-  .createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Glitch Pets Bot ok');
-  })
-  .listen(PORT, () => {
-    console.log(`Web server running on port ${PORT}`);
-  });
-
+// 1) Start Telegram bot with long polling
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
-async function checkDb() {
-  try {
-    const { rows } = await db.query('select now() as now');
-    console.log('DB OK:', rows[0].now);
-  } catch (e) {
-    console.error('DB check failed:', e.message);
-  }
-}
+// 2) Tiny web server for Render health checks
+const app = express();
+app.get('/', (_req, res) => res.send('Glitch Pets bot is running.'));
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => console.log(`Web server running on port ${PORT}`));
 
-function helpText() {
-  return 'I know /ping and /hatch for now. More commands coming!';
-}
+// 3) Help text
+bot.setMyCommands([
+  { command: 'start', description: 'Start' },
+  { command: 'ping',  description: 'Ping the bot' },
+  { command: 'hatch', description: 'Hatch your egg' },
+]);
 
-function traitsLine(traits) {
-  return `Traits → color: ${traits.color}; aura: ${traits.aura}; eyes: ${traits.eyes}; pattern: ${traits.pattern}`;
-}
-
-// handlers
-bot.onText(/\/start/i, (msg) => {
-  bot.sendMessage(msg.chat.id, helpText(), { parse_mode: 'Markdown' });
+// 4) Handlers
+bot.onText(/^\/start|^hi$|^hello$/i, (msg) => {
+  bot.sendMessage(
+    msg.chat.id,
+    'I know /ping and /hatch for now. More commands coming!'
+  );
 });
 
-bot.onText(/\/ping/i, (msg) => {
+bot.onText(/^\/ping$/, (msg) => {
   bot.sendMessage(msg.chat.id, 'pong 🏓');
 });
 
-bot.onText(/\/hatch/i, async (msg) => {
-  const chatId = msg.chat.id;
-
-  // Build a deterministic “egg” and roll a pet from it
-  const egg = {
-    id: cryptoRandomId(),
-    user_id: msg.from?.id || 0,
-    hatch_at: new Date().toISOString(),
-  };
-
+bot.onText(/^\/hatch$/, async (msg) => {
   try {
+    // Build a stable “egg” seed from user + time for trait RNG
+    const egg = {
+      id: `${msg.chat.id}-${Date.now()}`,
+      user_id: msg.from?.id ?? msg.chat.id,
+      hatch_at: new Date().toISOString(),
+    };
+
     const pet = rollPetFromEgg(egg);
 
-    // Try to save to DB (optional). Wrapped in try/catch so it never breaks the reply.
-    try {
-      await db.query(
-        `insert into pets (user_id, species, is_shiny, traits)
-         values ($1, $2, $3, $4::jsonb)`,
-        [egg.user_id, 'glitchling', pet.is_shiny, JSON.stringify(pet.traits)]
-      );
-    } catch (dbErr) {
-      // non-fatal — just log it
-      console.error('DB insert skipped:', dbErr.message);
-    }
+    // (DB write will come later — keeping things simple & stable for now)
+    // Example when we enable DB:
+    // await db.query('INSERT INTO pets(user_id, traits, is_shiny) VALUES ($1,$2,$3)', [
+    //   egg.user_id,
+    //   pet.traits,
+    //   pet.is_shiny,
+    // ]);
 
+    const t = pet.traits;
     const lines = [
       '🥚 Your egg wiggles… crack! A glitch pet pops out! ✨',
       '',
-      traitsLine(pet.traits),
-    ].join('\n');
+      `Traits → color: ${t.color}; aura: ${t.aura}; eyes: ${t.eyes}; pattern: ${t.pattern}`,
+      pet.is_shiny ? '⭐️ SHINY!' : '',
+    ].filter(Boolean);
 
-    await bot.sendMessage(chatId, lines);
+    await bot.sendMessage(msg.chat.id, lines.join('\n'));
   } catch (err) {
-    console.error('Hatch error:', err);
-    await bot.sendMessage(chatId, '⚠️ Something went wrong hatching your pet.');
+    console.error('Hatch error', err);
+    bot.sendMessage(msg.chat.id, '⚠️ Something went wrong hatching your pet.');
   }
 });
 
-// boot
-(async function start() {
-  await checkDb();
-  console.log('Bot is running.');
-})();
-
-// simple id helper (not crypto-strong; fine for demo ids)
-function cryptoRandomId() {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36);
-}
+// 5) Fallback for other messages
+bot.on('message', (msg) => {
+  if (typeof msg.text === 'string' && !msg.text.startsWith('/')) {
+    bot.sendMessage(
+      msg.chat.id,
+      'I know /ping and /hatch for now. More commands coming!'
+    );
+  }
+});
