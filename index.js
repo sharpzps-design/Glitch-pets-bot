@@ -1,96 +1,231 @@
-// index.js (ESM)
-// ---------------------------
-import express from "express";
-import { Telegraf } from "telegraf";
-import db from "./src/db.js"; // uses DATABASE_URL inside
+// index.js
+import 'dotenv/config';
+import express from 'express';
+import { Telegraf } from 'telegraf';
+import { v4 as uuidv4 } from 'uuid';
+import db from './src/db.js'; // exports { query, pool } but we use query()
 
-// ---- Env checks ----
-const { BOT_TOKEN, APP_URL, PORT } = process.env;
-if (!BOT_TOKEN) throw new Error("BOT_TOKEN missing");
-if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL missing");
+const BOT_TOKEN = process.env.BOT_TOKEN;
+if (!BOT_TOKEN) {
+  throw new Error('Missing BOT_TOKEN env var');
+}
 
 const app = express();
-app.use(express.json());
-
-// Basic health route for Render checks
-app.get("/", (req, res) => res.send("OK"));
-app.get("/healthz", async (req, res) => {
-  try {
-    await db.query("select NOW()");
-    res.json({ ok: true, db: "up" });
-  } catch (e) {
-    console.error("DB health check failed:", e?.message || e);
-    res.status(500).json({ ok: false, db: "down" });
-  }
-});
-
-// ---- Telegram bot ----
 const bot = new Telegraf(BOT_TOKEN);
 
-// Log every update to Render logs (very helpful while debugging)
-bot.use(Telegraf.log());
+// --- tiny helpers -----------------------------------------------------------
+const SPECIES = ['glitchling', 'pixpup', 'bytebun', 'dataduck', 'cachecat'];
 
-// /start
+const secondsLeft = (iso) => Math.max(0, Math.ceil((new Date(iso) - Date.now()) / 1000));
+const fmt = (s) => {
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  if (m <= 0) return `${r}s`;
+  return `${m}m ${r}s`;
+};
+
+async function getOrCreateUser(ctx) {
+  const tgId = String(ctx.from.id);
+  const username = ctx.from.username ?? null;
+
+  // Upsert by telegram_id; adjust if your table lacks a UNIQUE on telegram_id
+  const { rows } = await db.query(
+    `INSERT INTO users (telegram_id, username)
+     VALUES ($1, $2)
+     ON CONFLICT (telegram_id) DO UPDATE SET username = EXCLUDED.username
+     RETURNING id`,
+    [tgId, username]
+  );
+  return rows[0].id;
+}
+
+async function getActiveEgg(userId) {
+  const { rows } = await db.query(
+    `SELECT * FROM eggs
+     WHERE user_id = $1 AND status = 'incubating'
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [userId]
+  );
+  return rows[0] || null;
+}
+
+async function giveEgg(userId, hatchInSeconds = 120) {
+  const id = uuidv4();
+  const seed = uuidv4().slice(0, 8);
+  const { rows } = await db.query(
+    `INSERT INTO eggs (id, user_id, status, created_at, hatch_at, seed)
+     VALUES ($1, $2, 'incubating', NOW(), NOW() + make_interval(secs => $3), $4)
+     RETURNING *`,
+    [id, userId, hatchInSeconds, seed]
+  );
+  return rows[0];
+}
+
+async function listPets(userId, limit = 5) {
+  const { rows } = await db.query(
+    `SELECT species, is_shiny, created_at
+     FROM pets
+     WHERE user_id = $1
+     ORDER BY created_at DESC
+     LIMIT $2`,
+    [userId, limit]
+  );
+  return rows;
+}
+
+// --- command handlers -------------------------------------------------------
 bot.start(async (ctx) => {
-  await ctx.reply("🐾 Welcome to Glitch Pets!");
-  await ctx.reply("Try: /ping or /hatch");
-});
-
-// /ping
-bot.command("ping", (ctx) => ctx.reply("pong 🏓"));
-
-// /hatch (demo)
-bot.command("hatch", async (ctx) => {
   try {
-    // Example: ensure user exists in DB (safe no-op if table empty)
-    await db.query("select 1"); // keep simple for now
-    await ctx.reply("🥚 Your egg wiggles… crack! A glitch pet pops out! ✨");
-  } catch (e) {
-    console.error("hatch error:", e?.message || e);
-    await ctx.reply("⚠️ I had trouble talking to the database. Try again soon.");
-  }
-});
+    const userId = await getOrCreateUser(ctx);
 
-// Respond to any plain text
-bot.on("text", (ctx) =>
-  ctx.reply("I know /ping and /hatch for now. More commands coming!")
-);
-
-// Non-text messages
-bot.on("message", (ctx) => {
-  if (!ctx.message.text) {
-    return ctx.reply("I only understand text right now. Try /ping or /hatch.");
-  }
-});
-
-// ---- Start server & bot (webhook if APP_URL, else polling) ----
-const port = Number(PORT) || 10000;
-const WEBHOOK_PATH = "/telegram";
-
-app.listen(port, async () => {
-  console.log(`Web server running on port ${port}`);
-
-  try {
-    if (APP_URL) {
-      const fullWebhook = `${APP_URL}${WEBHOOK_PATH}`;
-      // Remove old webhook then set our current one
-      await bot.telegram.deleteWebhook().catch(() => {});
-      await bot.telegram.setWebhook(fullWebhook);
-      app.use(bot.webhookCallback(WEBHOOK_PATH));
-      console.log(`Bot webhook set to: ${fullWebhook}`);
-    } else {
-      await bot.launch();
-      console.log("Bot launched in long-polling mode (no APP_URL set).");
+    // ensure one active egg
+    let egg = await getActiveEgg(userId);
+    if (!egg) {
+      egg = await giveEgg(userId, 120); // 2 minutes
+      await ctx.reply('🥚 You found a mysterious egg! It’s now incubating…');
     }
 
-    // Quick DB check at boot
-    const r = await db.query("select NOW() as now");
-    console.log("DB OK:", r?.rows?.[0]?.now);
-  } catch (e) {
-    console.error("Startup error:", e?.message || e);
+    const left = secondsLeft(egg.hatch_at);
+    await ctx.reply(
+      `Welcome to Glitch Pets!\n\n` +
+      `Your egg will hatch in ~ ${fmt(left)}.\n` +
+      `Try /status or /pets while you wait.`
+    );
+  } catch (err) {
+    console.error('start error:', err);
+    await ctx.reply('Something went wrong starting your adventure 😿');
   }
 });
 
-// Graceful shutdown
-process.once("SIGINT", () => bot.stop("SIGINT"));
-process.once("SIGTERM", () => bot.stop("SIGTERM"));
+bot.command('ping', (ctx) => ctx.reply('pong 🏓'));
+
+bot.command('status', async (ctx) => {
+  try {
+    const userId = await getOrCreateUser(ctx);
+    const egg = await getActiveEgg(userId);
+    if (egg) {
+      const left = secondsLeft(egg.hatch_at);
+      return ctx.reply(`🥚 Egg status: incubating… hatches in ~ ${fmt(left)}.`);
+    }
+    const pets = await listPets(userId, 1);
+    if (pets.length) {
+      const p = pets[0];
+      return ctx.reply(
+        `${p.is_shiny ? '✨' : '🐾'} Latest pet: ${p.species} — hatched at ${new Date(
+          p.created_at
+        ).toLocaleString()}`
+      );
+    }
+    return ctx.reply('No egg incubating yet. Use /start to get one!');
+  } catch (err) {
+    console.error('/status error:', err);
+    ctx.reply('Could not fetch status right now.');
+  }
+});
+
+bot.command('pets', async (ctx) => {
+  try {
+    const userId = await getOrCreateUser(ctx);
+    const pets = await listPets(userId, 5);
+    if (!pets.length) return ctx.reply('You have no pets yet. Keep hatching!');
+    const lines = pets.map(
+      (p, i) =>
+        `${i + 1}. ${p.is_shiny ? '✨' : '🐾'} ${p.species} — ${new Date(
+          p.created_at
+        ).toLocaleString()}`
+    );
+    ctx.reply(lines.join('\n'));
+  } catch (err) {
+    console.error('/pets error:', err);
+    ctx.reply('Could not list pets right now.');
+  }
+});
+
+// Manual hatch trigger (for testing): sets your active egg to hatch now
+bot.command('hatch', async (ctx) => {
+  try {
+    const userId = await getOrCreateUser(ctx);
+    const egg = await getActiveEgg(userId);
+    if (!egg) return ctx.reply('You have no active egg.');
+    await db.query(`UPDATE eggs SET hatch_at = NOW() WHERE id = $1`, [egg.id]);
+    ctx.reply('⏱️ Speeding up time… your egg will hatch any moment!');
+  } catch (err) {
+    console.error('/hatch error:', err);
+    ctx.reply('Could not hurry the hatch. Try again.');
+  }
+});
+
+// Fallback text
+bot.on('text', (ctx) =>
+  ctx.reply('I know /ping, /start, /status, /pets, and /hatch for now. More coming soon!')
+);
+
+// --- background hatcher loop -----------------------------------------------
+async function processDueEggs() {
+  try {
+    const { rows: due } = await db.query(
+      `SELECT e.id, e.user_id, e.seed, u.telegram_id
+       FROM eggs e
+       JOIN users u ON u.id = e.user_id
+       WHERE e.status = 'incubating' AND e.hatch_at <= NOW()
+       ORDER BY e.hatch_at ASC
+       LIMIT 10`
+    );
+
+    for (const egg of due) {
+      // roll a species + shiny flag (1/20 chance)
+      const species = SPECIES[Math.floor(Math.random() * SPECIES.length)];
+      const isShiny = Math.random() < 1 / 20;
+
+      // complete in a transaction-ish sequence
+      const petId = uuidv4();
+      await db.query(
+        `INSERT INTO pets (id, user_id, species, stage, is_shiny, traits, created_at)
+         VALUES ($1, $2, $3, 1, $4, '{}'::jsonb, NOW())`,
+        [petId, egg.user_id, species, isShiny]
+      );
+      await db.query(`UPDATE eggs SET status = 'hatched' WHERE id = $1`, [egg.id]);
+
+      // notify user
+      const msg = `${isShiny ? '✨' : '🎉'} Your egg hatched into a ${species}${
+        isShiny ? ' (shiny!)' : ''
+      }!`;
+      try {
+        await bot.telegram.sendMessage(egg.telegram_id, msg);
+      } catch (e) {
+        console.warn('sendMessage failed:', e.message);
+      }
+    }
+  } catch (err) {
+    console.error('hatcher loop error:', err);
+  }
+}
+
+// run every 20 seconds
+setInterval(processDueEggs, 20_000);
+
+// --- webhook server ---------------------------------------------------------
+const secretPath = `/telegraf/${bot.secretPathComponent()}`;
+
+// health + simple root
+app.get('/', (_req, res) => res.send('Glitch Pets bot is alive.'));
+app.get('/health', async (_req, res) => {
+  try {
+    const { rows } = await db.query('SELECT NOW() as now');
+    res.json({ ok: true, db_time: rows[0].now });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// telegram webhook
+app.use(await bot.createWebhook({ domain: process.env.WEBHOOK_DOMAIN ?? '', path: secretPath }));
+app.post(secretPath, (req, res) => res.sendStatus(200));
+
+// start server
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => {
+  console.log(`Web server running on port ${PORT}`);
+  console.log(`Webhook path: ${secretPath}`);
+});
