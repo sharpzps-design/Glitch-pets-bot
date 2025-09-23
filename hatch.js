@@ -1,35 +1,49 @@
-// hatch.js
+const { pool } = require('./src/db');
 
-// Simple random helpers
-const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+// check every 30s for due eggs
+const TICK_MS = 30 * 1000;
 
-const COLORS = ['Neon Blue', 'Crimson Red', 'Aurora Purple', 'Cyber Yellow'];
-const AURAS  = ['Smoke', 'Sparks', 'Halo', 'Glitch'];
-const EYES   = ['Glitch Green', 'Laser Pink', 'Chrome', 'Void'];
-const PATTERNS = ['None', 'Stripes', 'Spots', 'Circuit'];
+function initHatcher(bot) {
+  async function tick() {
+    try {
+      // claim due eggs by marking them HATCHING to avoid double-send on parallel ticks
+      const { rows } = await pool.query(
+        `UPDATE eggs
+           SET status = 'HATCHING'
+         WHERE id IN (
+           SELECT id FROM eggs
+            WHERE status = 'PENDING' AND hatch_at <= NOW()
+            FOR UPDATE SKIP LOCKED
+         )
+         RETURNING id, user_id, species;`
+      );
 
-export async function handleHatch({ bot, msg, query }) {
-  const userId = msg.from.id;
+      for (const egg of rows) {
+        try {
+          await bot.sendMessage(egg.user_id, `🎉 Your ${egg.species} hatched!`);
+          await pool.query('UPDATE eggs SET status = $1 WHERE id = $2', ['HATCHED', egg.id]);
+        } catch (e) {
+          console.error('Failed to send hatch message', e);
+          // If failed to send, set back to PENDING to retry later
+          await pool.query('UPDATE eggs SET status = $1 WHERE id = $2', ['PENDING', egg.id]);
+        }
+      }
+    } catch (e) {
+      console.error('hatcher tick error', e);
+    } finally {
+      setTimeout(tick, TICK_MS);
+    }
+  }
 
-  // create a pet row (adapt table/columns to your schema)
-  const traits = {
-    color: pick(COLORS),
-    aura: pick(AURAS),
-    eyes: pick(EYES),
-    pattern: pick(PATTERNS),
-  };
+  setTimeout(tick, TICK_MS);
+  console.log('Hatcher loop running.');
+}
 
-  // Example insert (adjust to your tables!)
-  // Suppose you have a `pets` table: id SERIAL, user_id BIGINT, color TEXT, aura TEXT, eyes TEXT, pattern TEXT, created_at TIMESTAMP DEFAULT now()
-  await query(
-    `INSERT INTO pets (user_id, color, aura, eyes, pattern)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [userId, traits.color, traits.aura, traits.eyes, traits.pattern]
-  );
-
-  await bot.sendMessage(
-    msg.chat.id,
-    `🥚 Your egg wiggles… crack! A glitch pet pops out!\n\n` +
-      `Traits → color: ${traits.color}; aura: ${traits.aura}; eyes: ${traits.eyes}; pattern: ${traits.pattern}`
+async function scheduleEgg({ userId, species, hatchAt }) {
+  await pool.query(
+    'INSERT INTO eggs (user_id, species, hatch_at) VALUES ($1, $2, $3)',
+    [userId, species, hatchAt]
   );
 }
+
+module.exports = { initHatcher, scheduleEgg };
