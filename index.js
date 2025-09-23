@@ -13,6 +13,7 @@ const bot = new Telegraf(BOT_TOKEN);
 const app = express();
 app.use(express.json());
 
+// --- helpers -------------------------------------------------
 async function findOrCreateUser(ctx) {
   const tgId = ctx.from.id;
   const username = ctx.from.username || null;
@@ -27,7 +28,7 @@ async function findOrCreateUser(ctx) {
 
 async function giveStarterEgg(userId) {
   const id = uuidv4();
-  const hatchAt = dayjs().add(24, 'hour').toISOString();
+  const hatchAt = dayjs().add(24, 'hour').toISOString(); // change to 2 minutes for testing
   const rarityTable = { shiny: 0.05 };
   const seed = uuidv4();
   await query(
@@ -45,6 +46,7 @@ function fmtTimeLeft(ts) {
   return `${h}h ${m}m`;
 }
 
+// --- bot commands -------------------------------------------
 bot.start(async (ctx) => {
   const user = await findOrCreateUser(ctx);
   const eggs = await query('SELECT * FROM eggs WHERE user_id=$1', [user.id]);
@@ -69,7 +71,7 @@ bot.command('status', async (ctx) => {
 
   const lines = eggs.map((e) => {
     if (e.status === 'HATCHED') return `🥚 ${e.species} Egg → 🐣 Hatched`;
-    if (e.status === 'READY') return `🥚 ${e.species} Egg → ✅ Ready to hatch`;
+    if (e.status === 'READY')   return `🥚 ${e.species} Egg → ✅ Ready to hatch`;
     return `🥚 ${e.species} Egg → ⏳ ${fmtTimeLeft(e.hatch_at)} left`;
   });
 
@@ -113,8 +115,9 @@ bot.action(/HATCH:(.+)/, async (ctx) => {
   );
 });
 
-// Web server + cron
+// --- web server + cron --------------------------------------
 app.get('/', (_, res) => res.send('Glitch Pets Bot alive'));
+
 app.get('/cron', async (_req, res) => {
   const { rows: pending } = await query(
     "SELECT e.*, u.telegram_id FROM eggs e JOIN users u ON e.user_id=u.id WHERE e.status='PENDING' AND e.hatch_at <= now()"
@@ -140,14 +143,22 @@ app.get('/cron', async (_req, res) => {
   res.json({ flipped: pending.length });
 });
 
-const PORT = process.env.PORT || 3000;// --- diagnostics: prints true/false, not your secrets
+// --- diagnostics + launch -----------------------------------
+// prints booleans (not your secrets) so we know env vars are set
 console.log('ENV CHECK', {
   BOT_TOKEN: !!process.env.BOT_TOKEN,
   DB_URL: !!process.env.DATABASE_URL
 });
 
 bot.catch((err) => console.error('Telegraf error:', err));
+
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log('Web server on :' + PORT));
-bot.launch().then(() => console.log('Bot started'));
+
+bot.launch({
+  dropPendingUpdates: true,
+  allowedUpdates: ['message', 'callback_query']
+}).then(() => console.log('Bot started'));
+
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
