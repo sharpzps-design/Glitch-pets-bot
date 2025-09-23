@@ -140,7 +140,13 @@ app.get('/cron', async (_req, res) => {
   res.json({ flipped: pending.length });
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3000;// --- diagnostics: prints true/false, not your secrets
+console.log('ENV CHECK', {
+  BOT_TOKEN: !!process.env.BOT_TOKEN,
+  DB_URL: !!process.env.DATABASE_URL
+});
+
+bot.catch((err) => console.error('Telegraf error:', err));
 app.listen(PORT, () => console.log('Web server on :' + PORT));
 bot.launch().then(() => console.log('Bot started'));
 process.once('SIGINT', () => bot.stop('SIGINT'));
