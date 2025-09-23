@@ -4,13 +4,14 @@ const { Pool } = pkg;
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) {
-  throw new Error("DATABASE_URL is not set in environment variables");
+  throw new Error("DATABASE_URL is not set");
 }
 
 const pool = new Pool({
   connectionString,
   ssl: {
-    rejectUnauthorized: false, // ✅ accept Supabase self-signed cert
+    require: true,            // ✅ force SSL
+    rejectUnauthorized: false // ✅ accept Supabase's cert
   },
 });
 
