@@ -1,54 +1,96 @@
-// index.js
-import 'dotenv/config';
-import express from 'express';
-import { Telegraf } from 'telegraf';
-import db from './src/db.js'; // keeps the DB connection warm
+// index.js (ESM)
+// ---------------------------
+import express from "express";
+import { Telegraf } from "telegraf";
+import db from "./src/db.js"; // uses DATABASE_URL inside
 
-const PORT = process.env.PORT || 10000;
-const { BOT_TOKEN, APP_URL } = process.env;
-if (!BOT_TOKEN) throw new Error('BOT_TOKEN missing');
+// ---- Env checks ----
+const { BOT_TOKEN, APP_URL, PORT } = process.env;
+if (!BOT_TOKEN) throw new Error("BOT_TOKEN missing");
+if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL missing");
 
-const bot = new Telegraf(BOT_TOKEN);
-
-// == Commands ==
-bot.start(async (ctx) => {
-  await ctx.reply('🐾 Welcome to Glitch Pets!');
-  await ctx.reply('Try: /ping or /hatch');
-});
-
-bot.command('ping', (ctx) => ctx.reply('pong 🏓'));
-
-bot.command('hatch', async (ctx) => {
-  // Demo reply (no DB write yet)
-  await ctx.reply('🥚 Your egg wiggles… crack! A glitch pet pops out! ✨');
-  await ctx.reply('This is a placeholder. We can wire this to the database next.');
-});
-
-// Fallback for any text that isn’t a command
-bot.on('text', (ctx) => ctx.reply('I know /ping and /hatch. More commands coming!'));
-
-// == Webhook vs polling ==
 const app = express();
-app.get('/', (_req, res) => res.send('Glitch Pets bot is running.'));
 app.use(express.json());
 
-// Use webhook on Render if APP_URL is set, otherwise fall back to long polling (local/dev)
-(async () => {
+// Basic health route for Render checks
+app.get("/", (req, res) => res.send("OK"));
+app.get("/healthz", async (req, res) => {
+  try {
+    await db.query("select NOW()");
+    res.json({ ok: true, db: "up" });
+  } catch (e) {
+    console.error("DB health check failed:", e?.message || e);
+    res.status(500).json({ ok: false, db: "down" });
+  }
+});
+
+// ---- Telegram bot ----
+const bot = new Telegraf(BOT_TOKEN);
+
+// Log every update to Render logs (very helpful while debugging)
+bot.use(Telegraf.log());
+
+// /start
+bot.start(async (ctx) => {
+  await ctx.reply("🐾 Welcome to Glitch Pets!");
+  await ctx.reply("Try: /ping or /hatch");
+});
+
+// /ping
+bot.command("ping", (ctx) => ctx.reply("pong 🏓"));
+
+// /hatch (demo)
+bot.command("hatch", async (ctx) => {
+  try {
+    // Example: ensure user exists in DB (safe no-op if table empty)
+    await db.query("select 1"); // keep simple for now
+    await ctx.reply("🥚 Your egg wiggles… crack! A glitch pet pops out! ✨");
+  } catch (e) {
+    console.error("hatch error:", e?.message || e);
+    await ctx.reply("⚠️ I had trouble talking to the database. Try again soon.");
+  }
+});
+
+// Respond to any plain text
+bot.on("text", (ctx) =>
+  ctx.reply("I know /ping and /hatch for now. More commands coming!")
+);
+
+// Non-text messages
+bot.on("message", (ctx) => {
+  if (!ctx.message.text) {
+    return ctx.reply("I only understand text right now. Try /ping or /hatch.");
+  }
+});
+
+// ---- Start server & bot (webhook if APP_URL, else polling) ----
+const port = Number(PORT) || 10000;
+const WEBHOOK_PATH = "/telegram";
+
+app.listen(port, async () => {
+  console.log(`Web server running on port ${port}`);
+
   try {
     if (APP_URL) {
-      const path = '/webhook';
-      await bot.telegram.setWebhook(`${APP_URL}${path}`);
-      app.use(path, bot.webhookCallback(path));
-      console.log('Webhook set:', `${APP_URL}${path}`);
+      const fullWebhook = `${APP_URL}${WEBHOOK_PATH}`;
+      // Remove old webhook then set our current one
+      await bot.telegram.deleteWebhook().catch(() => {});
+      await bot.telegram.setWebhook(fullWebhook);
+      app.use(bot.webhookCallback(WEBHOOK_PATH));
+      console.log(`Bot webhook set to: ${fullWebhook}`);
     } else {
       await bot.launch();
-      console.log('Bot launched with long polling');
+      console.log("Bot launched in long-polling mode (no APP_URL set).");
     }
-  } catch (err) {
-    console.error('Bot start error:', err.message);
-  }
-})();
 
-app.listen(PORT, () => {
-  console.log('Web server running on port', PORT);
+    // Quick DB check at boot
+    const r = await db.query("select NOW() as now");
+    console.log("DB OK:", r?.rows?.[0]?.now);
+  } catch (e) {
+    console.error("Startup error:", e?.message || e);
+  }
 });
+
+// Graceful shutdown
+process.once("SIGINT", () => bot.stop("SIGINT"));
+process.once("SIGTERM", () => bot.stop("SIGTERM"));
